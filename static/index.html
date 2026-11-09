@@ -1,0 +1,542 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Remote PC">
+<link rel="apple-touch-icon" href="/icon.png">
+<link rel="manifest" href="/manifest.json">
+<title>Remote PC</title>
+<style>
+  :root {
+    --bg: #000; --panel: rgba(28,30,38,.94); --btn: #2c2f3a; --btn-on: #3d7bfd;
+    --text: #eef0f5; --muted: #8b90a0; --line: rgba(255,255,255,.08);
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 15px -apple-system, system-ui, sans-serif; overflow: hidden;
+    position: fixed; inset: 0; overscroll-behavior: none;
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+  }
+  #screen { position: fixed; left: 0; top: 0; touch-action: none; display: block; }
+  button {
+    font: inherit; color: var(--text); background: var(--btn); border: 0;
+    border-radius: 10px; padding: 0 10px; min-height: 40px; min-width: 40px;
+    touch-action: manipulation;
+  }
+  button.on { background: var(--btn-on); }
+  button:active { filter: brightness(1.3); }
+
+  #bar {
+    position: fixed; left: 50%; transform: translateX(-50%);
+    bottom: calc(env(safe-area-inset-bottom) + 8px);
+    display: flex; gap: 6px; padding: 6px; border-radius: 14px;
+    background: var(--panel); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    max-width: calc(100vw - 16px); overflow-x: auto; z-index: 10;
+  }
+  #bar.hidden { display: none; }
+  #bar button { font-size: 18px; }
+
+  .panel {
+    position: fixed; left: 50%; transform: translateX(-50%);
+    bottom: calc(env(safe-area-inset-bottom) + 64px);
+    width: min(560px, calc(100vw - 16px)); max-height: 60vh; overflow-y: auto;
+    background: var(--panel); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    border-radius: 14px; padding: 10px; z-index: 11; display: none;
+  }
+  .panel.open { display: block; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(58px, 1fr)); gap: 6px; }
+  .grid button { font-size: 13px; }
+  .sec { color: var(--muted); font-size: 12px; margin: 10px 2px 6px; text-transform: uppercase; letter-spacing: .04em; }
+  .sec:first-child { margin-top: 0; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 2px; border-bottom: 1px solid var(--line); }
+  .row:last-child { border-bottom: 0; }
+  .row input[type=range] { flex: 1; max-width: 55%; }
+  .row select { font: inherit; background: var(--btn); color: var(--text); border: 0; border-radius: 8px; padding: 6px; }
+  .help { color: var(--muted); font-size: 13px; line-height: 1.5; }
+
+  #kbd { position: fixed; left: -1000px; top: 0; opacity: 0; font-size: 16px; width: 10px; }
+
+  #status {
+    position: fixed; top: calc(env(safe-area-inset-top) + 6px); right: 8px; z-index: 9;
+    font-size: 11px; color: var(--muted); background: rgba(0,0,0,.5); padding: 2px 7px; border-radius: 8px;
+    pointer-events: none;
+  }
+  #mods { position: fixed; top: calc(env(safe-area-inset-top) + 6px); left: 8px; z-index: 9; display: flex; gap: 4px; pointer-events: none; }
+  #mods span { background: var(--btn-on); font-size: 11px; padding: 2px 7px; border-radius: 8px; }
+
+  #login {
+    position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center;
+    background: #0b0c10; padding: 24px;
+  }
+  #login.hidden { display: none; }
+  #login .card { width: min(360px, 100%); text-align: center; }
+  #login h1 { font-size: 24px; margin: 12px 0 4px; }
+  #login p { color: var(--muted); margin: 0 0 20px; }
+  #login input {
+    width: 100%; font-size: 17px; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line);
+    background: #16181f; color: var(--text); margin-bottom: 10px; -webkit-user-select: text; user-select: text;
+  }
+  #login button { width: 100%; background: var(--btn-on); min-height: 48px; font-weight: 600; }
+  #login .err { color: #ff6b6b; min-height: 20px; margin-top: 10px; font-size: 14px; }
+</style>
+</head>
+<body>
+
+<canvas id="screen"></canvas>
+<input id="kbd" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="send">
+<div id="status">…</div>
+<div id="mods"></div>
+
+<div id="bar">
+  <button id="bKbd" title="Clavier">⌨️</button>
+  <button id="bMode" title="Mode trackpad / tactile">🖱️</button>
+  <button id="bZoom" title="Zoom">1×</button>
+  <button id="bKeys" title="Touches spéciales">⌘</button>
+  <button id="bSet" title="Réglages">⚙️</button>
+  <button id="bHide" title="Masquer la barre (tap à 3 doigts pour la réafficher)">▾</button>
+</div>
+
+<div class="panel" id="pKeys">
+  <div class="sec">Modificateurs (maintenus jusqu'à la prochaine touche)</div>
+  <div class="grid">
+    <button data-mod="ctrl">Ctrl</button><button data-mod="alt">Alt</button>
+    <button data-mod="shift">Maj</button><button data-mod="win">Win</button>
+  </div>
+  <div class="sec">Touches</div>
+  <div class="grid">
+    <button data-k="esc">Échap</button><button data-k="tab">Tab</button>
+    <button data-k="enter">Entrée</button><button data-k="backspace">⌫</button>
+    <button data-k="delete">Suppr</button><button data-k="space">Espace</button>
+    <button data-k="up">↑</button><button data-k="down">↓</button>
+    <button data-k="left">←</button><button data-k="right">→</button>
+    <button data-k="home">Début</button><button data-k="end">Fin</button>
+    <button data-k="pageup">PgUp</button><button data-k="pagedown">PgDn</button>
+    <button data-k="printscreen">ImpÉc</button><button data-k="win">⊞</button>
+  </div>
+  <div class="sec">Raccourcis</div>
+  <div class="grid">
+    <button data-combo="ctrl+c">Copier</button><button data-combo="ctrl+v">Coller</button>
+    <button data-combo="ctrl+x">Couper</button><button data-combo="ctrl+z">Annuler</button>
+    <button data-combo="ctrl+a">Tout</button><button data-combo="ctrl+s">Enreg.</button>
+    <button data-combo="alt+tab">Alt+Tab</button><button data-combo="alt+f4">Fermer</button>
+    <button data-combo="win+d">Bureau</button><button data-combo="win+e">Explor.</button>
+    <button data-combo="win+l">Verrou.</button><button data-combo="ctrl+shift+esc">Gest. tâches</button>
+    <button data-combo="ctrl+w">Fermer onglet</button><button data-combo="ctrl+t">Nv onglet</button>
+  </div>
+  <div class="sec">Fonctions</div>
+  <div class="grid">
+    <button data-k="f1">F1</button><button data-k="f2">F2</button><button data-k="f3">F3</button>
+    <button data-k="f4">F4</button><button data-k="f5">F5</button><button data-k="f6">F6</button>
+    <button data-k="f7">F7</button><button data-k="f8">F8</button><button data-k="f9">F9</button>
+    <button data-k="f10">F10</button><button data-k="f11">F11</button><button data-k="f12">F12</button>
+  </div>
+  <div class="sec">Média</div>
+  <div class="grid">
+    <button data-k="playpause">⏯</button><button data-k="prev">⏮</button><button data-k="next">⏭</button>
+    <button data-k="volumedown">🔉</button><button data-k="volumeup">🔊</button><button data-k="mute">🔇</button>
+  </div>
+</div>
+
+<div class="panel" id="pSet">
+  <div class="row"><span>Qualité</span><input type="range" id="sQ" min="20" max="90" step="5"><span id="vQ"></span></div>
+  <div class="row"><span>Résolution</span>
+    <select id="sW"><option value="960">960 px</option><option value="1280">1280 px</option>
+      <option value="1600">1600 px</option><option value="1920">1920 px</option><option value="0">Native</option></select></div>
+  <div class="row"><span>Images/s max</span><input type="range" id="sF" min="5" max="30" step="5"><span id="vF"></span></div>
+  <div class="row"><span>Vitesse souris</span><input type="range" id="sS" min="0.5" max="4" step="0.25"><span id="vS"></span></div>
+  <div class="row"><span>Écran</span><select id="sM"></select></div>
+  <div class="row"><span>Code d'accès</span><button id="bLogout">Se déconnecter</button></div>
+  <div class="sec">Gestes</div>
+  <div class="help">
+    <b>1 doigt</b> : déplacer la souris · <b>tap</b> : clic gauche · <b>double tap</b> : double clic<br>
+    <b>appui long puis glisser</b> : glisser-déposer / sélectionner<br>
+    <b>tap 2 doigts</b> : clic droit · <b>glisser 2 doigts</b> : défiler · <b>pincer</b> : zoom<br>
+    <b>tap 3 doigts</b> : afficher / masquer la barre<br>
+    Mode 🖱️ trackpad : le doigt déplace le curseur comme un pavé tactile.<br>
+    Mode 👆 tactile : tu touches directement l'endroit à cliquer.
+  </div>
+</div>
+
+<div id="login">
+  <div class="card">
+    <div style="font-size:48px">🖥️</div>
+    <h1>Remote PC</h1>
+    <p>Entre le code affiché dans la fenêtre du serveur sur ton PC.</p>
+    <input id="code" placeholder="Code d'accès" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+    <button id="bLogin">Se connecter</button>
+    <div class="err" id="err"></div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const canvas = $('screen'), ctx = canvas.getContext('2d');
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem('rpc.' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+    set(k, v) { try { localStorage.setItem('rpc.' + k, JSON.stringify(v)); } catch {} },
+    del(k) { try { localStorage.removeItem('rpc.' + k); } catch {} },
+  };
+
+  // ------------------------------------------------------------------ état
+  const S = {
+    ws: null, token: null, connected: false, retry: 0,
+    img: null, imgW: 0, imgH: 0, scrW: 1920, scrH: 1080, cx: .5, cy: .5,
+    mode: store.get('mode', 'trackpad'), zoom: 1, focusX: .5, focusY: .5,
+    mods: new Set(), frames: 0, fps: 0, monitors: [],
+    cfg: Object.assign({ quality: 60, maxw: 1600, fps: 20, monitor: 1, speed: 1.5 }, store.get('cfg', {})),
+  };
+
+  // Code passé via le QR code (#code)
+  if (location.hash.length > 1) {
+    store.set('token', decodeURIComponent(location.hash.slice(1)));
+    history.replaceState(null, '', location.pathname);
+  }
+
+  // ------------------------------------------------------------------ connexion
+  function send(o) { if (S.ws && S.ws.readyState === 1) S.ws.send(JSON.stringify(o)); }
+
+  function connect() {
+    S.token = store.get('token', null);
+    if (!S.token) return showLogin();
+    if (S.ws && S.ws.readyState <= 1) return;
+    setStatus('Connexion…');
+    const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
+    ws.binaryType = 'blob';
+    S.ws = ws;
+    let meta = null, authed = false;
+    ws.onopen = () => ws.send(JSON.stringify({ t: 'auth', token: S.token }));
+    ws.onmessage = async ev => {
+      if (typeof ev.data === 'string') {
+        const m = JSON.parse(ev.data);
+        if (m.t === 'error') { authed = false; store.del('token'); showLogin(m.msg); ws.close(); return; }
+        if (m.t === 'hello') {
+          authed = true; S.connected = true; S.retry = 0; hideLogin();
+          S.monitors = m.monitors; fillMonitors(); document.title = 'Remote · ' + m.host;
+          sendSettings();
+        }
+        if (m.t === 'f') meta = m;
+        return;
+      }
+      // image
+      try {
+        const bmp = await createImageBitmap(ev.data);
+        if (S.img && S.img.close) S.img.close();
+        S.img = bmp; S.imgW = bmp.width; S.imgH = bmp.height;
+        if (meta) { S.scrW = meta.w; S.scrH = meta.h; S.cx = meta.cx; S.cy = meta.cy; }
+        S.frames++; draw();
+      } catch (e) {}
+      send({ t: 'ack' });
+    };
+    ws.onclose = () => {
+      S.connected = false;
+      if (!store.get('token', null)) return;
+      setStatus('Déconnecté – reconnexion…');
+      const delay = Math.min(5000, 500 * 2 ** S.retry++);
+      setTimeout(connect, delay);
+    };
+  }
+
+  function sendSettings() {
+    const c = S.cfg;
+    send({ t: 'settings', quality: c.quality, maxw: c.maxw, fps: c.fps, monitor: c.monitor });
+    store.set('cfg', c);
+  }
+
+  setInterval(() => {
+    S.fps = S.frames; S.frames = 0;
+    if (S.connected) setStatus(S.fps + ' i/s' + (S.zoom > 1 ? ' · ' + S.zoom.toFixed(1) + '×' : ''));
+  }, 1000);
+  function setStatus(t) { $('status').textContent = t; }
+
+  // ------------------------------------------------------------------ rendu
+  let vw = 0, vh = 0, dpr = 1, view = { s: 1, ox: 0, oy: 0 };
+
+  function resize() {
+    const vv = window.visualViewport;
+    vw = vv ? vv.width : innerWidth; vh = vv ? vv.height : innerHeight;
+    dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(vw * dpr); canvas.height = Math.round(vh * dpr);
+    canvas.style.width = vw + 'px'; canvas.style.height = vh + 'px';
+    draw();
+  }
+
+  function computeView() {
+    if (!S.imgW) return;
+    const fit = Math.min(vw / S.imgW, vh / S.imgH);
+    const s = fit * S.zoom;
+    const w = S.imgW * s, h = S.imgH * s;
+    let ox, oy;
+    if (S.zoom <= 1) { ox = (vw - w) / 2; oy = (vh - h) / 2; }
+    else {
+      const fx = S.mode === 'trackpad' ? S.cx : S.focusX;
+      const fy = S.mode === 'trackpad' ? S.cy : S.focusY;
+      ox = vw / 2 - fx * w; oy = vh / 2 - fy * h;
+      ox = w <= vw ? (vw - w) / 2 : Math.min(0, Math.max(vw - w, ox));
+      oy = h <= vh ? (vh - h) / 2 : Math.min(0, Math.max(vh - h, oy));
+    }
+    view = { s, ox, oy, w, h };
+  }
+
+  function draw() {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, vw, vh);
+    if (!S.img) return;
+    computeView();
+    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(S.img, view.ox, view.oy, view.w, view.h);
+  }
+
+  // point écran iPhone -> coordonnées normalisées du PC
+  function toRemote(x, y) {
+    return { x: Math.min(1, Math.max(0, (x - view.ox) / view.w)), y: Math.min(1, Math.max(0, (y - view.oy) / view.h)) };
+  }
+
+  addEventListener('resize', resize);
+  if (window.visualViewport) visualViewport.addEventListener('resize', resize);
+  resize();
+
+  // ------------------------------------------------------------------ gestes
+  let pend = { dx: 0, dy: 0, sx: 0, sy: 0 }, raf = 0;
+  function flush() {
+    raf = 0;
+    if (pend.dx || pend.dy) {
+      const dx = Math.trunc(pend.dx), dy = Math.trunc(pend.dy);
+      if (dx || dy) { send({ t: 'move', dx, dy }); pend.dx -= dx; pend.dy -= dy; }
+    }
+    if (Math.abs(pend.sx) >= .05 || Math.abs(pend.sy) >= .05) {
+      send({ t: 'scroll', dx: +pend.sx.toFixed(2), dy: +pend.sy.toFixed(2) }); pend.sx = pend.sy = 0;
+    }
+  }
+  function queue() { if (!raf) raf = requestAnimationFrame(flush); }
+
+  const TAP_MS = 250, TAP_PX = 10, LONG_MS = 450;
+  let g = null;  // geste courant
+
+  function centroid(ts) {
+    let x = 0, y = 0; for (const t of ts) { x += t.clientX; y += t.clientY; }
+    return { x: x / ts.length, y: y / ts.length };
+  }
+  function dist(ts) { return Math.hypot(ts[0].clientX - ts[1].clientX, ts[0].clientY - ts[1].clientY); }
+
+  canvas.addEventListener('touchstart', e => {
+    e.preventDefault(); closePanels();
+    const ts = e.touches, n = ts.length, c = centroid(ts);
+    if (!g) g = { t0: performance.now(), max: n, moved: false, start: c, last: c, kind: null, drag: false, lp: 0 };
+    g.max = Math.max(g.max, n);
+    g.last = c;
+    if (n === 1) {
+      g.lt = performance.now();
+      g.lp = setTimeout(() => {
+        if (!g || g.moved || g.max > 1) return;
+        g.drag = true;
+        if (S.mode === 'touch') { const p = toRemote(c.x, c.y); S.focusX = p.x; S.focusY = p.y; send({ t: 'moveto', ...p }); }
+        send({ t: 'down', b: 'left' });
+        setStatus('Glisser…');
+      }, LONG_MS);
+    } else {
+      clearTimeout(g.lp);
+      if (n === 2) { g.d0 = dist(ts); g.z0 = S.zoom; }
+    }
+  }, { passive: false });
+
+  canvas.addEventListener('touchmove', e => {
+    e.preventDefault();
+    if (!g) return;
+    const ts = e.touches, n = ts.length, c = centroid(ts);
+    const dx = c.x - g.last.x, dy = c.y - g.last.y;
+    g.last = c;
+    if (Math.hypot(c.x - g.start.x, c.y - g.start.y) > TAP_PX) { g.moved = true; clearTimeout(g.lp); }
+
+    if (n === 1 && g.max === 1) {
+      if (S.mode === 'trackpad') {
+        const now = performance.now(), dt = Math.max(1, now - (g.lt || now)); g.lt = now;
+        const v = Math.hypot(dx, dy) / dt;             // px/ms
+        const accel = 1 + Math.min(2.5, v * 1.2);
+        const k = S.cfg.speed * accel * (S.scrW / Math.max(1, vw)) * 0.5 / S.zoom;
+        pend.dx += dx * k; pend.dy += dy * k; queue();
+      } else if (g.moved || g.drag) {
+        const p = toRemote(c.x, c.y);
+        S.focusX = p.x; S.focusY = p.y;
+        send({ t: 'moveto', ...p });
+      }
+    } else if (n === 2) {
+      const d = dist(ts);
+      if (!g.kind && g.moved) g.kind = Math.abs(d - g.d0) > 40 ? 'pinch' : 'scroll';
+      if (!g.kind && Math.abs(d - g.d0) > 40) { g.kind = 'pinch'; g.moved = true; }
+      if (g.kind === 'pinch') {
+        S.zoom = Math.min(5, Math.max(1, g.z0 * d / g.d0));
+        if (S.mode === 'touch') { const p = toRemote(c.x, c.y); S.focusX = p.x; S.focusY = p.y; }
+        updateZoomBtn(); draw();
+      } else if (g.kind === 'scroll') {
+        pend.sy += dy / 30; pend.sx -= dx / 30; queue();
+      }
+    }
+  }, { passive: false });
+
+  canvas.addEventListener('touchend', e => {
+    e.preventDefault();
+    if (!g) return;
+    if (e.touches.length > 0) return;          // attendre que tous les doigts soient levés
+    clearTimeout(g.lp);
+    const dur = performance.now() - g.t0;
+    if (g.drag) {
+      send({ t: 'up', b: 'left' });
+    } else if (!g.moved && dur < 400) {
+      if (g.max === 1) {
+        if (S.mode === 'touch') {
+          const p = toRemote(g.start.x, g.start.y); S.focusX = p.x; S.focusY = p.y;
+          send({ t: 'moveto', ...p });
+        }
+        send({ t: 'click', b: 'left' });
+      } else if (g.max === 2) {
+        send({ t: 'click', b: 'right' });
+      } else if (g.max >= 3) {
+        $('bar').classList.toggle('hidden'); closePanels();
+      }
+    }
+    g = null;
+  }, { passive: false });
+  canvas.addEventListener('touchcancel', () => { if (g && g.drag) send({ t: 'up', b: 'left' }); if (g) clearTimeout(g.lp); g = null; });
+
+  // Souris (si utilisé depuis un ordinateur / iPad avec souris)
+  canvas.addEventListener('mousemove', e => { const p = toRemote(e.clientX, e.clientY); send({ t: 'moveto', ...p }); });
+  canvas.addEventListener('mousedown', e => send({ t: 'down', b: ['left', 'middle', 'right'][e.button] }));
+  canvas.addEventListener('mouseup', e => send({ t: 'up', b: ['left', 'middle', 'right'][e.button] }));
+  canvas.addEventListener('contextmenu', e => e.preventDefault());
+  canvas.addEventListener('wheel', e => { e.preventDefault(); pend.sy -= e.deltaY / 100; pend.sx += e.deltaX / 100; queue(); }, { passive: false });
+
+  // ------------------------------------------------------------------ clavier
+  const kbd = $('kbd');
+  const SPECIAL = { Backspace: 'backspace', Enter: 'enter', Tab: 'tab', Escape: 'esc', ArrowUp: 'up', ArrowDown: 'down',
+                    ArrowLeft: 'left', ArrowRight: 'right', Delete: 'delete', Home: 'home', End: 'end' };
+
+  function pressKey(k) {
+    send({ t: 'key', k, mods: [...S.mods] });
+    clearMods();
+  }
+  function typeText(s) {
+    if (S.mods.size) { for (const ch of s) pressKey(ch); }
+    else send({ t: 'text', s });
+  }
+
+  kbd.addEventListener('keydown', e => {
+    if (SPECIAL[e.key]) { e.preventDefault(); pressKey(SPECIAL[e.key]); }
+  });
+  kbd.addEventListener('beforeinput', e => {
+    e.preventDefault();
+    const it = e.inputType;
+    if (it === 'insertText' || it === 'insertReplacementText' || it === 'insertFromPaste') {
+      const s = e.data ?? (e.dataTransfer && e.dataTransfer.getData('text')) ?? '';
+      if (s) typeText(s);
+    } else if (it === 'deleteContentBackward') pressKey('backspace');
+    else if (it === 'deleteContentForward') pressKey('delete');
+    else if (it === 'insertLineBreak' || it === 'insertParagraph') pressKey('enter');
+  });
+  kbd.addEventListener('input', () => { kbd.value = ''; });   // filet de sécurité
+  kbd.addEventListener('blur', () => $('bKbd').classList.remove('on'));
+  kbd.addEventListener('focus', () => $('bKbd').classList.add('on'));
+
+  $('bKbd').addEventListener('click', () => {
+    if (document.activeElement === kbd) kbd.blur(); else { kbd.value = ''; kbd.focus(); }
+  });
+
+  // ------------------------------------------------------------------ modificateurs
+  function renderMods() {
+    document.querySelectorAll('[data-mod]').forEach(b => b.classList.toggle('on', S.mods.has(b.dataset.mod)));
+    $('mods').innerHTML = [...S.mods].map(m => `<span>${m}</span>`).join('');
+  }
+  function clearMods() { S.mods.clear(); renderMods(); }
+
+  document.querySelectorAll('[data-mod]').forEach(b => b.addEventListener('click', () => {
+    const m = b.dataset.mod; S.mods.has(m) ? S.mods.delete(m) : S.mods.add(m); renderMods();
+  }));
+  document.querySelectorAll('[data-k]').forEach(b => b.addEventListener('click', () => {
+    const k = b.dataset.k;
+    if (k === 'win' && !S.mods.size) return pressKey('win');
+    pressKey(k);
+  }));
+  document.querySelectorAll('[data-combo]').forEach(b => b.addEventListener('click', () => {
+    const parts = b.dataset.combo.split('+'); const k = parts.pop();
+    send({ t: 'key', k, mods: parts }); closePanels();
+  }));
+
+  // ------------------------------------------------------------------ barre & panneaux
+  function closePanels() {
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('open'));
+    $('bKeys').classList.remove('on'); $('bSet').classList.remove('on');
+  }
+  function togglePanel(id, btn) {
+    const p = $(id), open = !p.classList.contains('open');
+    closePanels(); if (open) { p.classList.add('open'); btn.classList.add('on'); }
+  }
+  $('bKeys').addEventListener('click', () => togglePanel('pKeys', $('bKeys')));
+  $('bSet').addEventListener('click', () => togglePanel('pSet', $('bSet')));
+  $('bHide').addEventListener('click', () => { $('bar').classList.add('hidden'); closePanels(); });
+
+  function updateMode() { $('bMode').textContent = S.mode === 'trackpad' ? '🖱️' : '👆'; store.set('mode', S.mode); }
+  $('bMode').addEventListener('click', () => { S.mode = S.mode === 'trackpad' ? 'touch' : 'trackpad'; updateMode(); draw(); });
+  updateMode();
+
+  function updateZoomBtn() { $('bZoom').textContent = (S.zoom < 1.05 ? 1 : +S.zoom.toFixed(1)) + '×'; }
+  $('bZoom').addEventListener('click', () => {
+    S.zoom = S.zoom < 1.5 ? 2 : S.zoom < 2.5 ? 3 : 1;
+    if (S.mode === 'touch') { S.focusX = S.cx; S.focusY = S.cy; }
+    updateZoomBtn(); draw();
+  });
+
+  // réglages
+  function bindRange(id, key, fmt, apply) {
+    const el = $(id), out = $('v' + id.slice(1));
+    el.value = S.cfg[key]; out.textContent = fmt(S.cfg[key]);
+    el.addEventListener('input', () => { S.cfg[key] = +el.value; out.textContent = fmt(+el.value); });
+    el.addEventListener('change', () => { store.set('cfg', S.cfg); if (apply) sendSettings(); });
+  }
+  bindRange('sQ', 'quality', v => v + '%', true);
+  bindRange('sF', 'fps', v => v, true);
+  bindRange('sS', 'speed', v => v + '×', false);
+  $('sW').value = String(S.cfg.maxw);
+  $('sW').addEventListener('change', () => { S.cfg.maxw = +$('sW').value; sendSettings(); });
+  $('sM').addEventListener('change', () => { S.cfg.monitor = +$('sM').value; sendSettings(); });
+
+  function fillMonitors() {
+    const sel = $('sM'); sel.innerHTML = '';
+    S.monitors.forEach(m => {
+      if (m.i === 0 && S.monitors.length > 1) {
+        if (S.monitors.length > 2) sel.add(new Option(`Tous (${m.w}×${m.h})`, 0));
+        return;
+      }
+      sel.add(new Option(`Écran ${m.i} (${m.w}×${m.h})`, m.i));
+    });
+    if (![...sel.options].some(o => +o.value === S.cfg.monitor)) S.cfg.monitor = +sel.options[0].value;
+    sel.value = String(S.cfg.monitor);
+  }
+
+  $('bLogout').addEventListener('click', () => { store.del('token'); if (S.ws) S.ws.close(); closePanels(); showLogin(); });
+
+  // ------------------------------------------------------------------ login
+  function showLogin(msg) { $('login').classList.remove('hidden'); $('err').textContent = msg || ''; setStatus('—'); }
+  function hideLogin() { $('login').classList.add('hidden'); }
+  function doLogin() {
+    const v = $('code').value.trim(); if (!v) return;
+    store.set('token', v); $('err').textContent = ''; $('code').blur();
+    if (S.ws) { S.ws.onclose = null; S.ws.close(); }
+    connect();
+  }
+  $('bLogin').addEventListener('click', doLogin);
+  $('code').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && (!S.ws || S.ws.readyState > 1) && store.get('token', null)) { S.retry = 0; connect(); }
+  });
+
+  connect();
+})();
+</script>
+</body>
+</html>
